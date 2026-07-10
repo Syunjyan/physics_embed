@@ -232,6 +232,82 @@ class NavierStokes2D(BaseEquation):
         return sum(torch.mean((pred[key] - true[key].detach()) ** 2) for key in ("u", "v", "p"))
 
 
+class NavierStokesTaylorGreen2D(BaseEquation):
+    def __init__(self, viscosity: float = 0.01) -> None:
+        super().__init__(
+            "navier_stokes_taylor_green",
+            input_dim=3,
+            raw_output_dim=2,
+            supervised_keys=("u", "v", "p"),
+            has_time=True,
+        )
+        self.viscosity = viscosity
+        self.k = 2.0 * torch.pi
+
+    def exact_psi_p(self, points: Tensor) -> TensorDict:
+        x, y, t = points[:, 0:1], points[:, 1:2], points[:, 2:3]
+        k = self.k
+        velocity_decay = torch.exp(-2.0 * self.viscosity * k**2 * t)
+        pressure_decay = torch.exp(-4.0 * self.viscosity * k**2 * t)
+        return {
+            "psi": torch.cos(k * x) * torch.cos(k * y) * velocity_decay / k,
+            "p": -0.25 * (torch.cos(2.0 * k * x) + torch.cos(2.0 * k * y)) * pressure_decay,
+        }
+
+    def exact(self, points: Tensor) -> TensorDict:
+        fields = self.exact_psi_p(points)
+        psi = fields["psi"]
+        fields["u"] = column_grad(psi, points, 1)
+        fields["v"] = -column_grad(psi, points, 0)
+        return fields
+
+    def prediction(self, model: nn.Module, points: Tensor) -> TensorDict:
+        raw = model(points)
+        psi = raw[:, 0:1]
+        return {
+            "psi": psi,
+            "p": raw[:, 1:2],
+            "u": column_grad(psi, points, 1),
+            "v": -column_grad(psi, points, 0),
+        }
+
+    def pde_residuals(self, model: nn.Module, points: Tensor) -> TensorDict:
+        fields = self.prediction(model, points)
+        u, v, p = fields["u"], fields["v"], fields["p"]
+        u_t = column_grad(u, points, 2)
+        v_t = column_grad(v, points, 2)
+        u_x = column_grad(u, points, 0)
+        u_y = column_grad(u, points, 1)
+        v_x = column_grad(v, points, 0)
+        v_y = column_grad(v, points, 1)
+        p_x = column_grad(p, points, 0)
+        p_y = column_grad(p, points, 1)
+        return {
+            "ns_u": u_t + u * u_x + v * u_y + p_x - self.viscosity * laplacian(u, points),
+            "ns_v": v_t + u * v_x + v * v_y + p_y - self.viscosity * laplacian(v, points),
+        }
+
+    def sources(self, points: Tensor) -> TensorDict:
+        zeros = torch.zeros((points.shape[0], 1), dtype=points.dtype, device=points.device)
+        return {"fu": zeros, "fv": zeros, "viscosity": torch.full_like(zeros, self.viscosity)}
+
+    def boundary_loss(self, model: nn.Module, count: int, device: torch.device) -> Tensor:
+        if count <= 0:
+            return torch.zeros((), device=device)
+        pts = torch.rand((count, 3), device=device)
+        initial = pts.clone()
+        initial[:, 2] = 0.0
+
+        side = pts.clone()
+        side[:, 0] = torch.round(side[:, 0])
+        horizontal = pts.clone()
+        horizontal[:, 1] = torch.round(horizontal[:, 1])
+        bc_points = torch.cat([initial, side, horizontal], dim=0).requires_grad_(True)
+        pred = self.prediction(model, bc_points)
+        true = self.exact(bc_points)
+        return sum(torch.mean((pred[key] - true[key].detach()) ** 2) for key in ("u", "v", "p"))
+
+
 class LinearElasticity2D(BaseEquation):
     def __init__(self, lambda_: float = 1.0, mu: float = 0.5, q: float = 4.0) -> None:
         super().__init__(
@@ -414,12 +490,93 @@ class LinearElasticityUniaxial2D(BaseEquation):
         )
 
 
+class LinearElasticityMirrorSymmetric2D(BaseEquation):
+    def __init__(self, lambda_: float = 1.0, mu: float = 0.5, amplitude_x: float = 0.04, amplitude_y: float = 0.02) -> None:
+        super().__init__(
+            "linear_elasticity_mirror",
+            input_dim=2,
+            raw_output_dim=5,
+            supervised_keys=("ux", "uy", "sigmaxx", "sigmayy", "sigmaxy"),
+        )
+        self.lambda_ = lambda_
+        self.mu = mu
+        self.amplitude_x = amplitude_x
+        self.amplitude_y = amplitude_y
+
+    def exact(self, points: Tensor) -> TensorDict:
+        x, y = points[:, 0:1], points[:, 1:2]
+        xc = x - 0.5
+        ux = self.amplitude_x * xc * (1.0 - 4.0 * xc**2) * torch.sin(torch.pi * y)
+        uy = self.amplitude_y * torch.cos(torch.pi * xc) * y * (1.0 - y)
+        exx = column_grad(ux, points, 0)
+        eyy = column_grad(uy, points, 1)
+        exy = (column_grad(ux, points, 1) + column_grad(uy, points, 0)) / 2
+        sigmaxx = (self.lambda_ + 2.0 * self.mu) * exx + self.lambda_ * eyy
+        sigmayy = (self.lambda_ + 2.0 * self.mu) * eyy + self.lambda_ * exx
+        sigmaxy = 2.0 * self.mu * exy
+        return {
+            "ux": ux,
+            "uy": uy,
+            "sigmaxx": sigmaxx,
+            "sigmayy": sigmayy,
+            "sigmaxy": sigmaxy,
+            "exx": exx,
+            "eyy": eyy,
+            "exy": exy,
+        }
+
+    def body_force(self, points: Tensor, fields: TensorDict | None = None) -> TensorDict:
+        fields = self.exact(points) if fields is None else fields
+        force_x = -(column_grad(fields["sigmaxx"], points, 0) + column_grad(fields["sigmaxy"], points, 1))
+        force_y = -(column_grad(fields["sigmayy"], points, 1) + column_grad(fields["sigmaxy"], points, 0))
+        return {"fx": force_x, "fy": force_y}
+
+    def sources(self, points: Tensor) -> TensorDict:
+        return self.body_force(points)
+
+    def pde_residuals(self, model: nn.Module, points: Tensor) -> TensorDict:
+        pred = self.prediction(model, points)
+        ux, uy = pred["ux"], pred["uy"]
+        sigmaxx, sigmayy, sigmaxy = pred["sigmaxx"], pred["sigmayy"], pred["sigmaxy"]
+        exx = column_grad(ux, points, 0)
+        eyy = column_grad(uy, points, 1)
+        exy = (column_grad(ux, points, 1) + column_grad(uy, points, 0)) / 2
+        force = self.body_force(points)
+        return {
+            "balance_x": column_grad(sigmaxx, points, 0) + column_grad(sigmaxy, points, 1) + force["fx"],
+            "balance_y": column_grad(sigmayy, points, 1) + column_grad(sigmaxy, points, 0) + force["fy"],
+            "constitutive_xx": (self.lambda_ + 2.0 * self.mu) * exx + self.lambda_ * eyy - sigmaxx,
+            "constitutive_yy": (self.lambda_ + 2.0 * self.mu) * eyy + self.lambda_ * exx - sigmayy,
+            "constitutive_xy": 2.0 * self.mu * exy - sigmaxy,
+        }
+
+    def boundary_loss(self, model: nn.Module, count: int, device: torch.device) -> Tensor:
+        if count <= 0:
+            return torch.zeros((), device=device)
+        s = torch.rand((count, 1), device=device)
+        zeros, ones = torch.zeros_like(s), torch.ones_like(s)
+        boundaries = torch.cat(
+            [
+                torch.cat([zeros, s], dim=1),
+                torch.cat([ones, s], dim=1),
+                torch.cat([s, zeros], dim=1),
+                torch.cat([s, ones], dim=1),
+            ],
+            dim=0,
+        ).requires_grad_(True)
+        pred = self.prediction(model, boundaries)
+        true = self.exact(boundaries)
+        return sum(torch.mean((pred[key] - true[key].detach()) ** 2) for key in self.supervised_keys)
+
+
 EQUATIONS: Dict[str, Callable[[], BaseEquation]] = {
     "burgers": Burgers2D,
     "heat": HeatConduction2D,
     "linear_elasticity": LinearElasticity2D,
+    "linear_elasticity_mirror": LinearElasticityMirrorSymmetric2D,
     "linear_elasticity_uniaxial": LinearElasticityUniaxial2D,
     "navier_stokes": NavierStokes2D,
+    "navier_stokes_taylor_green": NavierStokesTaylorGreen2D,
 }
 
 

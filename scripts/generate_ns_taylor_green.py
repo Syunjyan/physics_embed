@@ -1,0 +1,30 @@
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from physics_embed.ns_spectral import generate_pdebench_style_ns_dataset
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate PDEBench-style Taylor-Green NS dataset.")
+    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--viscosity", type=float, required=True)
+    parser.add_argument("--spatial-resolution", type=int, default=32)
+    parser.add_argument("--time-steps", type=int, default=21)
+    parser.add_argument("--t-final", type=float, default=1.0)
+    args = parser.parse_args()
+    meta = generate_pdebench_style_ns_dataset(
+        args.out,
+        viscosity=args.viscosity,
+        spatial_resolution=args.spatial_resolution,
+        time_steps=args.time_steps,
+        t_final=args.t_final,
+    )
+    print(meta)
+
+
+if __name__ == "__main__":
+    main()

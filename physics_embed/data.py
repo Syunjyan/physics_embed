@@ -13,7 +13,27 @@ def generate_dataset(
     out: Path,
     spatial_resolution: int,
     time_steps: int,
+    viscosity: float | None = None,
+    t_final: float = 1.0,
 ) -> None:
+    if equation_name == "navier_stokes_taylor_green":
+        if viscosity is None:
+            raise ValueError("navier_stokes_taylor_green requires --viscosity")
+        from physics_embed.ns_spectral import generate_pdebench_style_ns_dataset
+
+        meta = generate_pdebench_style_ns_dataset(
+            out,
+            viscosity=viscosity,
+            spatial_resolution=spatial_resolution,
+            time_steps=time_steps,
+            t_final=t_final,
+        )
+        print(
+            f"saved PDEBench-style {equation_name} dataset: {out} "
+            f"(nu={viscosity}, points={meta['points']}, solver_err={meta['solver_max_abs_error']:.3e})"
+        )
+        return
+
     equation = get_equation(equation_name)
     points = equation.make_points(
         spatial_resolution=spatial_resolution,
@@ -37,12 +57,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--spatial-resolution", type=int, default=64)
     parser.add_argument("--time-steps", type=int, default=21)
+    parser.add_argument("--viscosity", type=float, default=None, help="Required for navier_stokes_taylor_green.")
+    parser.add_argument("--t-final", type=float, default=1.0)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    generate_dataset(args.equation, args.out, args.spatial_resolution, args.time_steps)
+    generate_dataset(
+        args.equation,
+        args.out,
+        args.spatial_resolution,
+        args.time_steps,
+        viscosity=args.viscosity,
+        t_final=args.t_final,
+    )
 
 
 if __name__ == "__main__":
