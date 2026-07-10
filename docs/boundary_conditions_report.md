@@ -91,7 +91,7 @@ sigma*n = t_bar
 
 1. 阶段一：仅训练数据项和强边界项，让网络先学到边界和观测点的大致尺度。
 2. 阶段二：加入 PDE 残差，逐步提高 PDE 权重，让内部场满足控制方程。
-3. 阶段三：加入经验公式、对称性和全局守恒检查，做精修。
+3. 阶段三：加入简化模型、对称性和全局守恒检查，做精修。
 4. 阶段四：对边界残差、PDE 残差最大的区域重新采样，进行 residual-based adaptive refinement。
 
 这种流程比一开始把所有 loss 混在一起更稳，尤其适合边界条件复杂、不同物理量尺度差异大的问题。
@@ -126,6 +126,6 @@ u(x,y,t)=u0(x,y)+t*N_theta(x,y,t)
 
 - 方程自带 `boundary_loss`，用于普通软约束；
 - `BoxDirichletTransform`，用于矩形域 Dirichlet 硬约束；
-- `SymmetryResidual` 和 `EmpiricalFormulaResidual`，用于边界之外的先验增强。
+- `SymmetryResidual` 和 `ReducedModelResidual`，用于边界之外的先验增强。
 
 下一步若要加强边界约束，可先从热传导开始，把左右温度边界从 soft loss 改成 hard transform；然后在线弹性中对固定位移边界使用 hard transform；最后再处理 Navier-Stokes 和 Burgers 的时间初始条件硬约束。

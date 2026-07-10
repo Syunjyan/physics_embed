@@ -1,6 +1,6 @@
 # physics_embed
 
-`physics_embed` 是一个面向二维物理方程的 PINN 实验仓库。第一阶段目标是为结构力学、热传导、Burgers 方程和 Navier-Stokes 方程生成可验证数据集，并提供统一 PINN 训练入口。第二阶段目标是在 PINN 前后加入对称性、经验公式和更强边界条件约束模块。
+`physics_embed` 是一个面向二维物理方程的 PINN 实验仓库。第一阶段目标是为结构力学、热传导、Burgers 方程和 Navier-Stokes 方程生成可验证数据集，并提供统一 PINN 训练入口。第二阶段目标是在 PINN 前后加入对称性、简化模型和更强边界条件约束模块。
 
 ## 当前方程
 
@@ -124,6 +124,39 @@ y=1: ux=0, sigmayy=(lambda+2*mu)*Q*sin(pi*x)
 
 场变量：位移 `ux, uy`，应力 `sigmaxx, sigmayy, sigmaxy`，应变 `exx, eyy, exy`，体力 `fx, fy`。
 
+### `linear_elasticity_uniaxial`: 单轴拉伸线弹性
+
+物理场景：单位矩形试样沿 x 方向单轴拉伸，横向 y 方向因泊松效应收缩。该数据集用于验证“单轴应力近似”这类简化模型约束。
+
+近似假设：
+
+```text
+sigmaxx = E * exx
+eyy = -nu * exx
+sigmayy = 0
+sigmaxy = 0
+```
+
+参数：
+
+```text
+E = 1.0
+nu = 0.3
+alpha = 0.02
+```
+
+解析场：
+
+```text
+ux = alpha * x
+uy = -nu * alpha * y
+sigmaxx = E * alpha
+sigmayy = 0
+sigmaxy = 0
+```
+
+场变量：位移 `ux, uy`，应力 `sigmaxx, sigmayy, sigmaxy`，应变 `exx, eyy, exy`，体力 `fx, fy`。
+
 ## 安装
 
 ```bash
@@ -137,6 +170,7 @@ python scripts/generate_dataset.py --equation heat --out data/heat.npz
 python scripts/generate_dataset.py --equation burgers --out data/burgers.npz
 python scripts/generate_dataset.py --equation navier_stokes --out data/navier_stokes.npz
 python scripts/generate_dataset.py --equation linear_elasticity --out data/linear_elasticity.npz
+python scripts/generate_dataset.py --equation linear_elasticity_uniaxial --out data/linear_elasticity_uniaxial.npz
 ```
 
 可调参数：
@@ -205,24 +239,40 @@ runs/baseline/linear_elasticity
 
 ```text
 experiments/baseline/run_pipeline.py
-experiments/linear_elasticity_empirical_ablation/run_ablation.py
+experiments/linear_elasticity_constitutive_ablation/run_ablation.py
+experiments/heat_reduced_model_ablation/run_ablation.py
+experiments/burgers_reduced_model_ablation/run_ablation.py
+experiments/navier_stokes_reduced_model_ablation/run_ablation.py
+experiments/linear_elasticity_reduced_model_ablation/run_ablation.py
 ```
 
-线弹性经验公式消融实验：
+线弹性 Hooke 本构残差消融实验：
 
 ```bash
-python experiments/linear_elasticity_empirical_ablation/run_ablation.py --device cuda:1
+python experiments/linear_elasticity_constitutive_ablation/run_ablation.py --device cuda:1
 ```
 
 该脚本会比较：
 
-- `without_empirical`: 平衡方程 + 数据 + 边界，不加入 Hooke 经验/本构残差；
-- `with_hooke_empirical`: 在上述基础上加入 `linear_elasticity_hooke` 作为经验公式软残差。
+- `without_constitutive`: 平衡方程 + 数据 + 边界，不加入 Hooke 本构残差；
+- `with_constitutive`: 在上述基础上加入 Hooke 本构残差。
+
+注意：Hooke 定律不是经验公式，而是线弹性 PDE 系统的本构闭合关系。如果网络同时输出位移和应力，完整的线弹性 PINN 物理残差应包含 Hooke 本构残差。
+
+简化模型消融实验：
+
+```bash
+python experiments/heat_reduced_model_ablation/run_ablation.py --device cuda:1
+python experiments/burgers_reduced_model_ablation/run_ablation.py --device cuda:1
+python experiments/navier_stokes_reduced_model_ablation/run_ablation.py --device cuda:1
+python experiments/linear_elasticity_reduced_model_ablation/run_ablation.py --device cuda:1
+```
 
 输出目录：
 
 ```text
-runs/ablation/linear_elasticity_empirical/
+runs/ablation/linear_elasticity_constitutive/
+runs/ablation/<equation>_reduced_model/
 ```
 
 ## 数据集可视化
@@ -238,9 +288,9 @@ python scripts/visualize_dataset.py --dataset data/linear_elasticity.npz --out r
 
 该脚本会对正负变量使用发散色图，更容易看出速度、压力、应力、体力等不同物理量的符号和空间结构。
 
-## 当前训练是否使用经验公式/对称性约束
+## 当前训练是否使用简化模型/对称性约束
 
-目前已经完成的 `runs/*_study_gpu1` 训练没有加入经验公式软约束，也没有加入对称性软约束。它们使用的是 baseline PINN 损失：
+目前已经完成的 `runs/*_study_gpu1` 训练没有加入简化模型软约束，也没有加入对称性软约束。它们使用的是 baseline PINN 损失：
 
 ```text
 L = L_pde + L_data + L_boundary
@@ -252,8 +302,9 @@ L = L_pde + L_data + L_boundary
 
 - baseline: `PDE + data + boundary`
 - symmetry: baseline + `SymmetryResidual`
-- empirical: baseline + `EmpiricalFormulaResidual`
-- combined: baseline + symmetry + empirical
+- reduced-model: baseline + `ReducedModelResidual`
+- constitutive: 用于检查 Hooke 等本构关系是否作为完整 PDE 残差的一部分
+- combined: baseline + symmetry + reduced-model
 - hard-constraint: 使用 `MirrorFeatureMap`、`PeriodicFeatureMap` 或 `BoxDirichletTransform`
 
 ## 约束模块
@@ -261,7 +312,7 @@ L = L_pde + L_data + L_boundary
 `physics_embed/constraints.py` 提供第二阶段使用的模块：
 
 - `SymmetryResidual`: 已知镜像、旋转、周期等对称性时，添加成对点残差；
-- `EmpiricalFormulaResidual`: 将经验公式或简化公式写成类似 PDE 的残差；
+- `ReducedModelResidual`: 将特定场景假设下的 PDE 简化模型写成类似 PDE 的残差；
 - `BoxDirichletTransform`: 对矩形区域的 Dirichlet 边界条件使用硬约束输出变换。
 
 这些模块可以在 PINN 训练循环中作为额外 loss 调用，也可以包装网络输出，在 PINN 前处理或后处理阶段使用。

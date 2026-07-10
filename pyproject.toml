@@ -1,7 +1,7 @@
 [project]
 name = "physics-embed"
 version = "0.1.0"
-description = "Dataset generation and PINN baselines with physics, symmetry, empirical, and boundary embeddings."
+description = "Dataset generation and PINN baselines with physics, symmetry, reduced-model, and boundary embeddings."
 requires-python = ">=3.9"
 dependencies = [
     "numpy",

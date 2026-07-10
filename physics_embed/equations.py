@@ -333,10 +333,92 @@ class LinearElasticity2D(BaseEquation):
         return loss + torch.mean(pred_up["ux"] ** 2) + torch.mean((pred_up["sigmayy"] - sigma_yy_up) ** 2)
 
 
+class LinearElasticityUniaxial2D(BaseEquation):
+    def __init__(self, young_modulus: float = 1.0, poisson_ratio: float = 0.3, strain: float = 0.02) -> None:
+        super().__init__(
+            "linear_elasticity_uniaxial",
+            input_dim=2,
+            raw_output_dim=5,
+            supervised_keys=("ux", "uy", "sigmaxx", "sigmayy", "sigmaxy"),
+        )
+        self.young_modulus = young_modulus
+        self.poisson_ratio = poisson_ratio
+        self.strain = strain
+
+    @property
+    def shear_modulus(self) -> float:
+        return self.young_modulus / (2.0 * (1.0 + self.poisson_ratio))
+
+    def exact(self, points: Tensor) -> TensorDict:
+        x, y = points[:, 0:1], points[:, 1:2]
+        exx = torch.full_like(x, self.strain)
+        eyy = torch.full_like(y, -self.poisson_ratio * self.strain)
+        exy = torch.zeros_like(x)
+        ux = self.strain * x
+        uy = -self.poisson_ratio * self.strain * y
+        sigmaxx = self.young_modulus * self.strain * torch.ones_like(x)
+        sigmayy = torch.zeros_like(x)
+        sigmaxy = torch.zeros_like(x)
+        return {
+            "ux": ux,
+            "uy": uy,
+            "sigmaxx": sigmaxx,
+            "sigmayy": sigmayy,
+            "sigmaxy": sigmaxy,
+            "exx": exx,
+            "eyy": eyy,
+            "exy": exy,
+        }
+
+    def sources(self, points: Tensor) -> TensorDict:
+        zeros = torch.zeros((points.shape[0], 1), dtype=points.dtype, device=points.device)
+        return {"fx": zeros, "fy": zeros}
+
+    def pde_residuals(self, model: nn.Module, points: Tensor) -> TensorDict:
+        pred = self.prediction(model, points)
+        ux, uy = pred["ux"], pred["uy"]
+        sigmaxx, sigmayy, sigmaxy = pred["sigmaxx"], pred["sigmayy"], pred["sigmaxy"]
+        exx = column_grad(ux, points, 0)
+        eyy = column_grad(uy, points, 1)
+        exy = (column_grad(ux, points, 1) + column_grad(uy, points, 0)) / 2
+        factor = self.young_modulus / (1.0 - self.poisson_ratio**2)
+        return {
+            "balance_x": column_grad(sigmaxx, points, 0) + column_grad(sigmaxy, points, 1),
+            "balance_y": column_grad(sigmayy, points, 1) + column_grad(sigmaxy, points, 0),
+            "plane_stress_xx": factor * (exx + self.poisson_ratio * eyy) - sigmaxx,
+            "plane_stress_yy": factor * (eyy + self.poisson_ratio * exx) - sigmayy,
+            "plane_stress_xy": 2.0 * self.shear_modulus * exy - sigmaxy,
+        }
+
+    def boundary_loss(self, model: nn.Module, count: int, device: torch.device) -> Tensor:
+        if count <= 0:
+            return torch.zeros((), device=device)
+        s = torch.rand((count, 1), device=device)
+        zeros, ones = torch.zeros_like(s), torch.ones_like(s)
+        left = torch.cat([zeros, s], dim=1)
+        bottom = torch.cat([s, zeros], dim=1)
+        right = torch.cat([ones, s], dim=1)
+        top = torch.cat([s, ones], dim=1)
+        pred_left = self.prediction(model, left)
+        pred_bottom = self.prediction(model, bottom)
+        pred_right = self.prediction(model, right)
+        pred_top = self.prediction(model, top)
+        target_sigma = self.young_modulus * self.strain
+        return (
+            torch.mean(pred_left["ux"] ** 2)
+            + torch.mean(pred_bottom["uy"] ** 2)
+            + torch.mean((pred_right["sigmaxx"] - target_sigma) ** 2)
+            + torch.mean(pred_right["sigmaxy"] ** 2)
+            + torch.mean(pred_top["sigmayy"] ** 2)
+            + torch.mean(pred_top["sigmaxy"] ** 2)
+        )
+
+
 EQUATIONS: Dict[str, Callable[[], BaseEquation]] = {
     "burgers": Burgers2D,
     "heat": HeatConduction2D,
     "linear_elasticity": LinearElasticity2D,
+    "linear_elasticity_uniaxial": LinearElasticityUniaxial2D,
     "navier_stokes": NavierStokes2D,
 }
 

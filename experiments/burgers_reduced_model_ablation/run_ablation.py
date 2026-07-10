@@ -6,21 +6,23 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from experiments._empirical_ablation_common import run_empirical_ablation
+from experiments._reduced_model_ablation_common import run_reduced_model_ablation
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="burgers empirical formula ablation.")
+    parser = argparse.ArgumentParser(description="burgers reduced-model ablation.")
     parser.add_argument("--equation", default="burgers")
     parser.add_argument("--dataset", default="data/burgers.npz")
-    parser.add_argument("--output-root", default="runs/ablation/burgers_empirical")
+    parser.add_argument("--output-root", default="runs/ablation/burgers_reduced_model")
     parser.add_argument("--device", default="cuda:1")
+    parser.add_argument("--reduced-model", default="burgers_diffusion_dominant")
+    parser.add_argument("--reduced-model-kwargs", default='{"viscosity": 0.01}')
     parser.add_argument("--epochs", type=int, default=2500)
     parser.add_argument("--samples", type=int, default=4096)
     parser.add_argument("--boundary-samples", type=int, default=1024)
     parser.add_argument("--hidden", type=int, nargs="+", default=[64, 64, 64, 64])
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--empirical-weight", type=float, default=0.1)
+    parser.add_argument("--reduced-model-weight", type=float, default=0.1)
     parser.add_argument("--pde-weight", type=float, default=1.0)
     parser.add_argument("--data-weight", type=float, default=5.0)
     parser.add_argument("--boundary-weight", type=float, default=3.0)
@@ -31,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    run_empirical_ablation(build_parser().parse_args())
+    run_reduced_model_ablation(build_parser().parse_args())
 
 
 if __name__ == "__main__":

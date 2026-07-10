@@ -15,6 +15,7 @@ DEFAULT_FIELDS = {
     "burgers": ("u", "v", "fu", "fv"),
     "navier_stokes": ("u", "v", "p", "fu", "fv"),
     "linear_elasticity": ("ux", "uy", "sigmaxx", "sigmayy", "sigmaxy", "fx", "fy"),
+    "linear_elasticity_uniaxial": ("ux", "uy", "sigmaxx", "sigmayy", "sigmaxy", "fx", "fy"),
 }
 
 

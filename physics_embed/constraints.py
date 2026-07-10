@@ -66,15 +66,15 @@ class PeriodicFeatureMap:
 
 
 @dataclass
-class EmpiricalFormulaResidual:
-    """Soft residual for empirical or simplified engineering formulas."""
+class ReducedModelResidual:
+    """Soft residual for reduced models derived under scenario assumptions."""
 
-    formula: Callable[[TensorDict, Tensor], TensorDict]
+    reduced_model: Callable[[TensorDict, Tensor], TensorDict]
     weight: float = 1.0
 
     def __call__(self, model: nn.Module, points: Tensor, predictor: Predictor) -> Tensor:
         predictions = predictor(model, points)
-        residuals = self.formula(predictions, points)
+        residuals = self.reduced_model(predictions, points)
         return self.weight * sum(torch.mean(value**2) for value in residuals.values())
 
 

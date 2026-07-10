@@ -1,25 +1,42 @@
-# 消融实验结构与线弹性经验公式实验
+# 消融实验结构
 
-## 实验目录结构
+## 1. 概念澄清
 
-当前将实验 pipeline 放在 `experiments/` 下：
+本项目后续区分三类约束：
+
+- **完整 PDE / 物理残差**：控制方程、几何方程、本构关系、边界条件。例如线弹性中的 Hooke 定律属于本构关系，是完整线弹性 PINN 残差的一部分。
+- **简化模型约束**：原 PDE 在特定场景假设下得到的近似模型，例如 Stokes 极限、Poiseuille 通道流、Burgers 扩散主导近似、1D 稳态导热近似。
+- **对称性约束**：几何、边界、载荷或初值导致的镜像、周期、旋转或 Lie 点对称。
+
+因此，旧的 `empirical` 命名已移除。Hooke/Fourier/Robin/能量衰减不再作为“经验公式消融”。
+
+## 2. 实验目录
 
 ```text
 experiments/
 ├── baseline/
 │   └── run_pipeline.py
-└── linear_elasticity_empirical_ablation/
+├── heat_reduced_model_ablation/
+│   └── run_ablation.py
+├── burgers_reduced_model_ablation/
+│   └── run_ablation.py
+├── navier_stokes_reduced_model_ablation/
+│   └── run_ablation.py
+├── linear_elasticity_reduced_model_ablation/
+│   └── run_ablation.py
+└── linear_elasticity_constitutive_ablation/
     └── run_ablation.py
 ```
 
-输出放在 `runs/` 下：
+输出目录：
 
 ```text
 runs/baseline/<equation>/
-runs/ablation/linear_elasticity_empirical/
+runs/ablation/<equation>_reduced_model/
+runs/ablation/linear_elasticity_constitutive/
 ```
 
-## Baseline
+## 3. Baseline
 
 Baseline 使用：
 
@@ -27,50 +44,60 @@ Baseline 使用：
 L = w_pde L_pde + w_data L_data + w_boundary L_boundary
 ```
 
-当前 baseline 没有加入对称性软约束，也没有加入经验公式软约束。Navier-Stokes 的流函数属于结构性硬约束，不属于消融中的 soft empirical/symmetry loss。
+当前 baseline 没有加入简化模型软约束，也没有加入对称性软约束。Navier-Stokes 的流函数属于结构性硬约束。
 
-## 线弹性经验公式消融
+## 4. 线弹性本构消融
 
 脚本：
 
 ```bash
-python experiments/linear_elasticity_empirical_ablation/run_ablation.py --device cuda:1
+python experiments/linear_elasticity_constitutive_ablation/run_ablation.py --device cuda:1
 ```
 
 对比组：
 
-1. `without_empirical`
+- `without_constitutive`: 平衡方程 + 数据 + 边界，不加入 Hooke 本构残差；
+- `with_constitutive`: 在上述基础上加入 Hooke 本构残差。
 
-   使用静力平衡方程、数据拟合和边界条件，但故意不加入本构/Hooke 残差。
+这个实验回答的是：当网络同时输出位移和应力时，Hooke 本构关系是否必须作为完整 PINN 物理残差的一部分。
 
-2. `with_hooke_empirical`
+## 5. 简化模型消融
 
-   在 `without_empirical` 基础上加入 Hooke 定律残差：
-
-   ```text
-   sigma = lambda tr(epsilon) I + 2 mu epsilon
-   ```
-
-这个设计用于回答：当应力和位移都由网络输出时，Hooke 经验/本构公式作为软约束是否能提升应力-位移一致性与泛化。
-
-## 评价指标
-
-每个 run 会输出：
-
-- `metrics.json`: 位移、应力的相对 L2 误差；
-- `fields.png`: 真值、预测、误差图；
-- `loss.png`: 单个 run 的 loss；
-- `ablation_loss.png`: 两组加权 loss 对比；
-- `summary.json`: 两组最终误差与 empirical loss 汇总。
-
-## 注意事项
-
-短 epoch smoke test 只验证代码可运行，不用于判断经验公式是否有效。正式比较应使用默认参数，或更长训练：
+脚本：
 
 ```bash
-python experiments/linear_elasticity_empirical_ablation/run_ablation.py \
-  --device cuda:1 \
-  --epochs 3000
+python experiments/heat_reduced_model_ablation/run_ablation.py --device cuda:1
+python experiments/burgers_reduced_model_ablation/run_ablation.py --device cuda:1
+python experiments/navier_stokes_reduced_model_ablation/run_ablation.py --device cuda:1
+python experiments/linear_elasticity_reduced_model_ablation/run_ablation.py --device cuda:1
 ```
 
-如果 `with_hooke_empirical` 的应力误差、Hooke residual 和边界误差同时更低，说明经验公式软约束有效。若只降低 Hooke residual 但数据误差变差，说明权重过高或公式适用范围需要限制。
+对比组：
+
+- `without_reduced_model`: baseline；
+- `with_reduced_model`: baseline + 特定假设下的简化模型残差。
+
+注意：简化模型只有在场景假设成立时才应该改善结果。如果当前 MMS 数据不满足该假设，加入简化模型可能使误差变差；这本身也是有效的消融结论。
+
+## 6. 汇总表
+
+使用：
+
+```bash
+python scripts/summarize_ablation.py \
+  --output-root runs/ablation/<name> \
+  --without-name without_reduced_model \
+  --with-name with_reduced_model \
+  --label reduced-model
+```
+
+线弹性本构消融：
+
+```bash
+python scripts/summarize_ablation.py \
+  --output-root runs/ablation/linear_elasticity_constitutive \
+  --without-name without_constitutive \
+  --with-name with_constitutive \
+  --label constitutive
+```
+

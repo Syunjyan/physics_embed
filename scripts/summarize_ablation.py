@@ -16,20 +16,20 @@ def _format_float(value: float) -> str:
     return f"{value:.6g}"
 
 
-def summarize(output_root: Path, without_name: str, with_name: str) -> str:
+def summarize(output_root: Path, without_name: str, with_name: str, label: str) -> str:
     without = _load_metrics(output_root / without_name)
-    with_empirical = _load_metrics(output_root / with_name)
-    keys = [key for key in without if key in with_empirical]
+    with_constraint = _load_metrics(output_root / with_name)
+    keys = [key for key in without if key in with_constraint]
 
     lines = [
-        "| Field | Metric | Without empirical | With empirical | Delta | Relative improvement |",
+        f"| Field | Metric | Without {label} | With {label} | Delta | Relative improvement |",
         "|---|---:|---:|---:|---:|---:|",
     ]
     for field in keys:
-        metric_names = sorted(set(without[field]) & set(with_empirical[field]))
+        metric_names = sorted(set(without[field]) & set(with_constraint[field]))
         for metric_name in metric_names:
             before = float(without[field][metric_name])
-            after = float(with_empirical[field][metric_name])
+            after = float(with_constraint[field][metric_name])
             delta = after - before
             improvement = (before - after) / before * 100.0 if before != 0.0 else 0.0
             lines.append(
@@ -41,17 +41,18 @@ def summarize(output_root: Path, without_name: str, with_name: str) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Print a Markdown table for empirical ablation metrics.")
+    parser = argparse.ArgumentParser(description="Print a Markdown table for ablation metrics.")
     parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--without-name", default="without_empirical")
-    parser.add_argument("--with-name", default="with_empirical")
+    parser.add_argument("--without-name", default="without_reduced_model")
+    parser.add_argument("--with-name", default="with_reduced_model")
+    parser.add_argument("--label", default="constraint")
     parser.add_argument("--out", type=Path, default=None)
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    table = summarize(args.output_root, args.without_name, args.with_name)
+    table = summarize(args.output_root, args.without_name, args.with_name, args.label)
     print(table)
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
