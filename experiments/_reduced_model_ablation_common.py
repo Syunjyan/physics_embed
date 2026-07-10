@@ -112,6 +112,7 @@ def train_one(
                 "boundary_samples": boundary_samples,
                 "hidden": hidden,
                 "lr": lr,
+                "seed": seed,
                 "device": str(device),
                 "ablation": "with_reduced_model" if use_reduced_model else "without_reduced_model",
                 "reduced_model_name": reduced_model_name if use_reduced_model else None,

@@ -107,6 +107,7 @@ def _train_one(
                 "boundary_samples": boundary_samples,
                 "hidden": hidden,
                 "lr": lr,
+                "seed": seed,
                 "device": str(device),
                 "ablation": "with_reduced_model" if use_reduced_model else "without_reduced_model",
                 "training_setting": "sparse_displacement_only",

@@ -171,6 +171,8 @@ python scripts/generate_dataset.py --equation burgers --out data/burgers.npz
 python scripts/generate_dataset.py --equation navier_stokes --out data/navier_stokes.npz
 python scripts/generate_dataset.py --equation linear_elasticity --out data/linear_elasticity.npz
 python scripts/generate_dataset.py --equation linear_elasticity_uniaxial --out data/linear_elasticity_uniaxial.npz
+python scripts/generate_dataset.py --equation linear_elasticity_mirror --out data/linear_elasticity_mirror.npz
+python scripts/generate_ns_taylor_green.py --viscosity 0.01
 ```
 
 可调参数：
@@ -235,15 +237,14 @@ runs/baseline/navier_stokes
 runs/baseline/linear_elasticity
 ```
 
-实验 pipeline 文件夹：
+正式实验入口：
 
 ```text
 experiments/baseline/run_pipeline.py
 experiments/linear_elasticity_constitutive_ablation/run_ablation.py
-experiments/heat_reduced_model_ablation/run_ablation.py
-experiments/burgers_reduced_model_ablation/run_ablation.py
-experiments/navier_stokes_reduced_model_ablation/run_ablation.py
-experiments/linear_elasticity_reduced_model_ablation/run_ablation.py
+experiments/linear_elasticity_uniaxial_sparse_reduced_model_ablation/run_ablation.py
+experiments/linear_elasticity_mirror_postprocess_symmetry/run_ablation.py
+experiments/navier_stokes_viscosity_interpolation/run_experiment.py
 ```
 
 线弹性 Hooke 本构残差消融实验：
@@ -259,20 +260,21 @@ python experiments/linear_elasticity_constitutive_ablation/run_ablation.py --dev
 
 注意：Hooke 定律不是经验公式，而是线弹性 PDE 系统的本构闭合关系。如果网络同时输出位移和应力，完整的线弹性 PINN 物理残差应包含 Hooke 本构残差。
 
-简化模型消融实验：
+场景匹配的简化模型、预测后对称投影和参数迁移实验：
 
 ```bash
-python experiments/heat_reduced_model_ablation/run_ablation.py --device cuda:1
-python experiments/burgers_reduced_model_ablation/run_ablation.py --device cuda:1
-python experiments/navier_stokes_reduced_model_ablation/run_ablation.py --device cuda:1
-python experiments/linear_elasticity_reduced_model_ablation/run_ablation.py --device cuda:1
+python experiments/linear_elasticity_uniaxial_sparse_reduced_model_ablation/run_ablation.py --device cuda:1
+python experiments/linear_elasticity_mirror_postprocess_symmetry/run_ablation.py --device cuda:1
+python experiments/navier_stokes_viscosity_interpolation/run_experiment.py --device cuda:1
 ```
 
-输出目录：
+注意：`heat`、`burgers`、通用 `navier_stokes` 的 reduced-model 入口所使用的默认简化假设与当前制造解场景不匹配，只能作为假设失配负对照，不能作为正向结论。
+
+正式报告与审计：
 
 ```text
-runs/ablation/linear_elasticity_constitutive/
-runs/ablation/<equation>_reduced_model/
+docs/experiment_report_template.md
+docs/experiment_rigor_audit.md
 ```
 
 ## 数据集可视化
@@ -288,24 +290,13 @@ python scripts/visualize_dataset.py --dataset data/linear_elasticity.npz --out r
 
 该脚本会对正负变量使用发散色图，更容易看出速度、压力、应力、体力等不同物理量的符号和空间结构。
 
-## 当前训练是否使用简化模型/对称性约束
+## 实验严谨性说明
 
-目前已经完成的 `runs/*_study_gpu1` 训练没有加入简化模型软约束，也没有加入对称性软约束。它们使用的是 baseline PINN 损失：
-
-```text
-L = L_pde + L_data + L_boundary
-```
-
-唯一例外是 Navier-Stokes 使用了流函数 `psi`，这是一个结构性硬嵌入：速度由 `u=dpsi/dy, v=-dpsi/dx` 得到，因此不可压连续性 `u_x+v_y=0` 自动满足。
-
-因此下一步非常适合做消融实验：
-
-- baseline: `PDE + data + boundary`
-- symmetry: baseline + `SymmetryResidual`
-- reduced-model: baseline + `ReducedModelResidual`
-- constitutive: 用于检查 Hooke 等本构关系是否作为完整 PDE 残差的一部分
-- combined: baseline + symmetry + reduced-model
-- hard-constraint: 使用 `MirrorFeatureMap`、`PeriodicFeatureMap` 或 `BoxDirichletTransform`
+- 当前指标来自同一规则网格上的场重建，不是独立测试集泛化指标；
+- 正式消融均为单随机种子；
+- 简化模型必须先验证适用假设；
+- Taylor-Green 数据为解析解，使用 PDEBench 兼容布局但不复现其数值求解器；
+- 权重插值要求两个源模型共享初始权重以保持隐藏单元对齐。
 
 ## 约束模块
 

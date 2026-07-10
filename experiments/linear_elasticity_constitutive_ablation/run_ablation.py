@@ -102,6 +102,7 @@ def _train_one(
                 "boundary_samples": boundary_samples,
                 "hidden": hidden,
                 "lr": lr,
+                "seed": seed,
                 "device": str(device),
                 "ablation": "with_constitutive" if use_constitutive else "without_constitutive",
                 "balance_weight": 0.1,

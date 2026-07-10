@@ -17,11 +17,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 from physics_embed.equations import NavierStokesTaylorGreen2D
 from physics_embed.models import MLP
-from physics_embed.ns_spectral import generate_pdebench_style_ns_dataset
+from physics_embed.ns_taylor_green import generate_taylor_green_dataset as generate_structured_taylor_green_dataset
 
 
 def generate_taylor_green_dataset(out: Path, viscosity: float, spatial_resolution: int, time_steps: int) -> dict[str, float]:
-    meta = generate_pdebench_style_ns_dataset(
+    meta = generate_structured_taylor_green_dataset(
         out,
         viscosity=viscosity,
         spatial_resolution=spatial_resolution,
@@ -29,8 +29,8 @@ def generate_taylor_green_dataset(out: Path, viscosity: float, spatial_resolutio
         t_final=1.0,
     )
     print(
-        f"saved PDEBench-style Taylor-Green NS dataset: {out} "
-        f"(nu={viscosity}, points={meta['points']}, solver_max_abs_error={meta['solver_max_abs_error']:.3e})"
+        f"saved structured Taylor-Green NS dataset: {out} "
+        f"(nu={viscosity}, points={meta['points']})"
     )
     return meta
 
@@ -47,7 +47,6 @@ def load_targets(npz: np.lib.npyio.NpzFile, device: torch.device) -> dict[str, t
         "x",
         "y",
         "dt",
-        "solver_max_abs_error",
         "generation_method",
     }
     return {
@@ -70,9 +69,8 @@ def evaluate_model(model: MLP, equation: NavierStokesTaylorGreen2D, dataset: Pat
     data = np.load(dataset)
     points = torch.tensor(data["points"], dtype=torch.float32, device=device).requires_grad_(True)
     pred_tensors = equation.prediction(model, points)
-    exact_tensors = equation.exact(points)
     pred = {key: pred_tensors[key].detach().cpu().numpy() for key in ("u", "v", "p")}
-    exact = {key: exact_tensors[key].detach().cpu().numpy() for key in ("u", "v", "p")}
+    exact = {key: np.asarray(data[key], dtype=np.float32) for key in ("u", "v", "p")}
     metrics = {
         key: {
             "relative_l2": relative_l2(pred[key], exact[key]),
@@ -106,6 +104,7 @@ def train_model(
     lr: float,
     seed: int,
     init_state: dict[str, torch.Tensor] | None = None,
+    init_name: str = "random",
     eval_every: int | None = None,
 ) -> dict[str, Any]:
     torch.manual_seed(seed)
@@ -163,8 +162,8 @@ def train_model(
         "boundary_samples": boundary_samples,
         "lr": lr,
         "seed": seed,
-        "init": "interpolated" if init_state is not None else "scratch",
-        "data_generation": "taylor_green_analytical_pdebench_layout",
+        "init": init_name,
+        "data_generation": "taylor_green_analytical_structured_layout",
     }
     (run_dir / "config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     (run_dir / "metrics_init.json").write_text(json.dumps(metrics_init, indent=2), encoding="utf-8")
@@ -299,6 +298,11 @@ def run(args: argparse.Namespace) -> None:
         "b": data_root / f"ns_tg_nu_{args.nu_b:g}.npz",
         "c": data_root / f"ns_tg_nu_{args.nu_c:g}.npz",
     }
+    if args.nu_a == args.nu_b:
+        raise ValueError("nu-a and nu-b must differ for interpolation")
+    if not min(args.nu_a, args.nu_b) <= args.nu_c <= max(args.nu_a, args.nu_b):
+        raise ValueError("nu-c must lie between nu-a and nu-b; extrapolation is not this experiment")
+
     dataset_meta = {}
     if not args.skip_generate:
         dataset_meta["a"] = generate_taylor_green_dataset(datasets["a"], args.nu_a, args.spatial_resolution, args.time_steps)
@@ -306,9 +310,14 @@ def run(args: argparse.Namespace) -> None:
         dataset_meta["c"] = generate_taylor_green_dataset(datasets["c"], args.nu_c, args.spatial_resolution, args.time_steps)
 
     hidden = tuple(args.hidden)
+    torch.manual_seed(args.seed)
+    common_model = MLP(3, 2, hidden_layers=hidden)
+    common_init = {key: value.detach().clone() for key, value in common_model.state_dict().items()}
+    torch.save(common_init, output_root / "common_init.pt")
+
     if not args.skip_sources:
         train_model(
-            run_root / "source_nu_a",
+            output_root / "source_nu_a",
             datasets["a"],
             args.nu_a,
             device,
@@ -318,9 +327,11 @@ def run(args: argparse.Namespace) -> None:
             args.boundary_samples,
             args.lr,
             args.seed,
+            init_state=common_init,
+            init_name="shared_common_init",
         )
         train_model(
-            run_root / "source_nu_b",
+            output_root / "source_nu_b",
             datasets["b"],
             args.nu_b,
             device,
@@ -329,16 +340,18 @@ def run(args: argparse.Namespace) -> None:
             args.samples,
             args.boundary_samples,
             args.lr,
-            args.seed + 1,
+            args.seed,
+            init_state=common_init,
+            init_name="shared_common_init",
         )
 
-    state_a = torch.load(run_root / "source_nu_a" / "model.pt", map_location=device)
-    state_b = torch.load(run_root / "source_nu_b" / "model.pt", map_location=device)
+    state_a = torch.load(output_root / "source_nu_a" / "model.pt", map_location=device)
+    state_b = torch.load(output_root / "source_nu_b" / "model.pt", map_location=device)
     alpha = (args.nu_c - args.nu_a) / (args.nu_b - args.nu_a)
     init_c = interpolate_state_dict(state_a, state_b, alpha)
 
     scratch = train_model(
-        run_root / "target_nu_c_scratch",
+        output_root / "target_nu_c_scratch",
         datasets["c"],
         args.nu_c,
         device,
@@ -348,9 +361,11 @@ def run(args: argparse.Namespace) -> None:
         args.boundary_samples,
         args.lr,
         args.seed + 2,
+        init_state=common_init,
+        init_name="shared_common_init_scratch",
     )
     interp = train_model(
-        run_root / "target_nu_c_interpolated",
+        output_root / "target_nu_c_interpolated",
         datasets["c"],
         args.nu_c,
         device,
@@ -361,6 +376,7 @@ def run(args: argparse.Namespace) -> None:
         args.lr,
         args.seed + 2,
         init_state=init_c,
+        init_name="aligned_weight_interpolation",
     )
 
     table = markdown_summary(scratch, interp)
@@ -369,6 +385,9 @@ def run(args: argparse.Namespace) -> None:
         "nu_b": args.nu_b,
         "nu_c": args.nu_c,
         "interpolation_alpha": alpha,
+        "data_root": str(data_root),
+        "output_root": str(output_root),
+        "datasets": {key: str(path) for key, path in datasets.items()},
         "dataset_meta": dataset_meta,
         "scratch": {
             "metrics_init": scratch["metrics_init"],
@@ -391,6 +410,7 @@ def run(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="PINN weight interpolation pretraining for viscosity-parametric Taylor-Green NS.")
+    parser.add_argument("--data-root", default="data", help="Directory for NS datasets (repo-relative by default).")
     parser.add_argument("--output-root", default="runs/ablation/ns_viscosity_interpolation")
     parser.add_argument("--device", default="cuda:1")
     parser.add_argument("--nu-a", type=float, default=0.005)
@@ -406,7 +426,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lr", type=float, default=8e-4)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--skip-generate", action="store_true")
-    parser.add_argument("--skip-sources", action="store_true", help="Reuse source models in output-root/runs.")
+    parser.add_argument("--skip-sources", action="store_true", help="Reuse source models under output-root.")
     return parser
 
 

@@ -19,9 +19,9 @@ def generate_dataset(
     if equation_name == "navier_stokes_taylor_green":
         if viscosity is None:
             raise ValueError("navier_stokes_taylor_green requires --viscosity")
-        from physics_embed.ns_spectral import generate_pdebench_style_ns_dataset
+        from physics_embed.ns_taylor_green import generate_taylor_green_dataset
 
-        meta = generate_pdebench_style_ns_dataset(
+        meta = generate_taylor_green_dataset(
             out,
             viscosity=viscosity,
             spatial_resolution=spatial_resolution,
@@ -29,8 +29,8 @@ def generate_dataset(
             t_final=t_final,
         )
         print(
-            f"saved PDEBench-style {equation_name} dataset: {out} "
-            f"(nu={viscosity}, points={meta['points']}, solver_err={meta['solver_max_abs_error']:.3e})"
+            f"saved structured {equation_name} dataset: {out} "
+            f"(nu={viscosity}, points={meta['points']})"
         )
         return
 
