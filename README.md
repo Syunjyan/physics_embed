@@ -1,6 +1,6 @@
 # physics_embed
 
-`physics_embed` 是一个面向二维物理方程的 PINN 实验仓库。
+`physics_embed` 是一个面向二维物理方程的实验仓库。
 
 ## 当前方程
 
